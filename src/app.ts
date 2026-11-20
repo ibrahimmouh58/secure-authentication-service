@@ -1,22 +1,64 @@
 import express from "express";
 import helmet from "helmet";
+import cors from "cors";
+import { env } from "./lib/env.js";
 import { ok, fail } from "./lib/response.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 
 export const app = express();
 
 app.disable("x-powered-by");
-app.use(helmet());
+
+// 1. En-têtes de sécurité
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        defaultSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+        baseUri: ["'none'"],
+        formAction: ["'none'"],
+      },
+    },
+    frameguard: { action: "deny" },
+  }),
+);
+
+app.use((_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
+
+// 2. CORS : liste blanche, jamais *
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      callback(null, env.CORS_ORIGINS.includes(origin));
+    },
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: false,
+    maxAge: 600,
+  }),
+);
+
+// 3. Lecture du body JSON (limité à 10 ko)
 app.use(express.json({ limit: "10kb" }));
 
+// 4. Routes
 app.get("/health", (_req, res) => {
   ok(res, { status: "ok" });
 });
 
-// Toute route inconnue → 404 dans l'enveloppe
+// 5. Route inconnue → 404
 app.use((_req, res) => {
   fail(res, 404, "NOT_FOUND", "Route not found");
 });
 
-// Gestionnaire d'erreurs : toujours en DERNIER
+// 6. Gestionnaire d'erreurs : toujours en dernier
 app.use(errorHandler);
