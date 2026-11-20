@@ -3,11 +3,12 @@
   "type": "module",
   "version": "1.0.0",
   "main": "index.js",
-  "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc",
-    "start": "node dist/server.js"
-  },
+ "scripts": {
+  "dev": "tsx watch src/server.ts",
+  "build": "prisma generate && tsc",
+  "start": "prisma migrate deploy && node dist/server.js",
+  "db:migrate": "prisma migrate dev"
+},
   "overrides": {
     "effect": "^3.22.1"
   },
