@@ -1,8 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
   provider = "prisma-client"
   output   = "../src/generated/prisma"
@@ -10,4 +5,147 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+// ============================================================
+// Utilisateurs
+// ============================================================
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // --- Ajouts : verrouillage du compte ---
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+
+  // --- Relations ---
+  sessions            Session[]
+  passwordResetTokens PasswordResetToken[]
+  mfaSecret           MfaSecret?
+  mfaChallenges       MfaChallenge[]
+  recoveryCodes       RecoveryCode[]
+  auditLogs           AuditLog[]
+}
+
+// ============================================================
+// Sessions (= familles de refresh tokens)
+// ============================================================
+
+model Session {
+  id            String    @id @default(uuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  revokedReason String?
+  ipAddress     String?
+  userAgent     String?
+
+  refreshTokens RefreshToken[]
+
+  @@index([userId])
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  sessionId String
+  session   Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  @@index([sessionId])
+}
+
+// ============================================================
+// Réinitialisation du mot de passe
+// ============================================================
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  @@index([userId])
+}
+
+// ============================================================
+// MFA (TOTP + codes de récupération)
+// ============================================================
+
+model MfaSecret {
+  id              String    @id @default(uuid())
+  userId          String    @unique
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  secretEncrypted String
+  confirmedAt     DateTime?
+  lastUsedStep    Int?
+  createdAt       DateTime  @default(now())
+}
+
+model MfaChallenge {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  usedAt    DateTime?
+  attempts  Int       @default(0)
+  ipAddress String?
+  userAgent String?
+
+  @@index([userId])
+}
+
+model RecoveryCode {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// ============================================================
+// Journal d'audit
+// ============================================================
+
+enum AuditOutcome {
+  SUCCESS
+  FAILURE
+}
+
+model AuditLog {
+  id        String       @id @default(uuid())
+  createdAt DateTime     @default(now())
+  event     String
+  outcome   AuditOutcome
+  reason    String?
+  userId    String?
+  user      User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  ipAddress String?
+  userAgent String?
+  metadata  Json?
+
+  @@index([userId])
+  @@index([event, createdAt])
 }
