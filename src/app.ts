@@ -1,6 +1,6 @@
 import express from "express";
 import helmet from "helmet";
-import { ok, fail } from "./lib/response";
+import { ok, fail } from "./lib/response.js";
 
 export const app = express();
 
