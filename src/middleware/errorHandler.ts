@@ -9,6 +9,9 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, next) => {
   }
 
   if (err instanceof AppError) {
+    for (const [name, value] of Object.entries(err.headers)) {
+      res.setHeader(name, value);
+    }
     fail(res, err.status, err.code, err.message);
     return;
   }

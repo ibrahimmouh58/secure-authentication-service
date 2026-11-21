@@ -7,6 +7,7 @@ import { getClientInfo } from "../lib/client.js";
 import { getAuth, requireAuth } from "../middleware/requireAuth.js";
 import { loginSchema, refreshSchema, registerSchema } from "../schemas/auth.schemas.js";
 import { loginUser, registerUser } from "../services/auth.service.js";
+import { rateLimitByAccount, rateLimitByIp } from "../lib/rateLimit.js";
 import {
   revokeAllSessions,
   revokeSession,
@@ -26,8 +27,9 @@ function toTokenResponse(tokens: TokenPair) {
 }
 
 // POST /api/v1/auth/register → 201
-authRouter.post("/register", async (req, res) => {
+authRouter.post("/register", rateLimitByIp("register"), async (req, res) => {
   const body = parseBody(registerSchema, req.body);
+  await rateLimitByAccount("register", body.email);
 
   if (body.role === "ADMIN") {
     throw new AppError(403, "FORBIDDEN", "Self-registration as ADMIN is not allowed");
@@ -38,14 +40,16 @@ authRouter.post("/register", async (req, res) => {
 });
 
 // POST /api/v1/auth/login → 200
-authRouter.post("/login", async (req, res) => {
+authRouter.post("/login", rateLimitByIp("login"), async (req, res) => {
   const body = parseBody(loginSchema, req.body);
+  await rateLimitByAccount("login", body.email);
+
   const tokens = await loginUser(body.email, body.password, getClientInfo(req));
   ok(res, toTokenResponse(tokens));
 });
 
 // POST /api/v1/auth/refresh → 200
-authRouter.post("/refresh", async (req, res) => {
+authRouter.post("/refresh", rateLimitByIp("refresh"), async (req, res) => {
   const body = parseBody(refreshSchema, req.body);
   const tokens = await rotateRefreshToken(body.refreshToken);
   ok(res, toTokenResponse(tokens));

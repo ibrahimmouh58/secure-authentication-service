@@ -149,3 +149,11 @@ model AuditLog {
   @@index([userId])
   @@index([event, createdAt])
 }
+
+model RateLimit {
+  key     String   @id
+  count   Int
+  resetAt DateTime
+
+  @@index([resetAt])
+}

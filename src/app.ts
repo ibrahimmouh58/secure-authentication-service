@@ -9,6 +9,7 @@ import { authRouter } from "./routes/auth.routes.js";
 export const app = express();
 
 app.disable("x-powered-by");
+app.set("trust proxy", env.TRUST_PROXY_HOPS);
 
 // 1. En-têtes de sécurité
 app.use(

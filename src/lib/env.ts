@@ -34,6 +34,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(7766),
   DATABASE_URL: z.string().min(1),
   CORS_ORIGINS: z.string().min(1),
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
 
   JWT_ISSUER: z.string().min(1),
   JWT_AUDIENCE: z.string().min(1),

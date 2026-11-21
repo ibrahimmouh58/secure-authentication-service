@@ -3,6 +3,7 @@ import { generateToken, sha256 } from "../lib/crypto.js";
 import { signAccessToken } from "../lib/jwt.js";
 import { env } from "../lib/env.js";
 import { AppError } from "../lib/errors.js";
+import { rateLimitByAccount } from "../lib/rateLimit.js";
 
 export type ClientInfo = {
   ipAddress?: string;
@@ -68,6 +69,7 @@ export async function rotateRefreshToken(presentedToken: string): Promise<TokenP
   }
 
   const { session } = stored;
+    await rateLimitByAccount("refresh", session.userId);
 
   // Rejeu : ce token a déjà été échangé → on révoque toute la famille
   if (stored.usedAt) {
