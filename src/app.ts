@@ -7,11 +7,15 @@ import { errorHandler } from "./middleware/errorHandler.js";
 import { authRouter } from "./routes/auth.routes.js";
 import { denyByDefault } from "./middleware/denyByDefault.js";
 import { usersRouter } from "./routes/users.routes.js";
+import { requestContext } from "./lib/requestContext.js";
+import { requestLogger } from "./middleware/requestLogger.js";
 
 export const app = express();
 
 app.disable("x-powered-by");
 app.set("trust proxy", env.TRUST_PROXY_HOPS);
+app.use(requestContext);
+app.use(requestLogger);
 
 // 1. En-têtes de sécurité
 app.use(

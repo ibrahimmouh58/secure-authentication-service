@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { env } from "../lib/env.js";
 import { AppError } from "../lib/errors.js";
+import { logger } from "../lib/logger.js";
 import { ok } from "../lib/response.js";
 import { parseBody } from "../lib/validation.js";
 import { getClientInfo } from "../lib/client.js";
@@ -112,7 +113,10 @@ authRouter.post("/password/forgot", rateLimitByIp("passwordForgot"), async (req,
 
   // Le travail se fait APRÈS la réponse : le temps de réponse ne dépend pas de l'existence du compte
   void requestPasswordReset(body.email).catch((error: unknown) => {
-    console.error("Password reset request failed:", error instanceof Error ? error.name : "unknown error");
+    logger.error(
+      { errorName: error instanceof Error ? error.name : "unknown" },
+      "password reset request failed",
+    );
   });
 
   ok(res, { message: "If an account exists for this email, a reset token has been sent." });

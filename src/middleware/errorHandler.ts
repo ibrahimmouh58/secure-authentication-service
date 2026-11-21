@@ -1,6 +1,9 @@
 import type { ErrorRequestHandler } from "express";
 import { AppError } from "../lib/errors.js";
 import { fail } from "../lib/response.js";
+import { logger } from "../lib/logger.js";
+import { getRequestContext } from "../lib/requestContext.js";
+
 
 export const errorHandler: ErrorRequestHandler = (err, _req, res, next) => {
   if (res.headersSent) {
@@ -26,6 +29,12 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, next) => {
     return;
   }
 
-  console.error("Unhandled error:", err instanceof Error ? err.stack : "unknown error");
-  fail(res, 500, "INTERNAL_ERROR", "An unexpected error occurred");
+  logger.error(
+    {
+      requestId: getRequestContext()?.requestId,
+      errorName: err instanceof Error ? err.name : "unknown",
+      stack: err instanceof Error ? err.stack?.split("\n").slice(1).join("\n") : undefined,
+    },
+    "unhandled error",
+  );
 };

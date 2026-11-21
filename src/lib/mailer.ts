@@ -2,13 +2,14 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { env } from "./env.js";
+import { logger } from "./logger.js";
 
 const OUTBOX_DIR = path.resolve("mail-outbox");
 
 export async function sendMail(to: string, subject: string, text: string): Promise<void> {
   if (env.NODE_ENV === "production") {
     // Pas de transport configuré : on n'écrit JAMAIS un token sur le disque en production
-    console.error("No mail transport configured; email not sent");
+        logger.error("no mail transport configured; email not sent");
     return;
   }
 

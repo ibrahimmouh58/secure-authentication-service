@@ -2,6 +2,7 @@ import * as argon2 from "argon2";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { AppError } from "./errors.js";
+import { logger } from "./logger.js";
 
 // --- 1. Hachage argon2id ---
 
@@ -51,7 +52,7 @@ export async function isPasswordBreached(password: string): Promise<boolean> {
     });
 
     if (!response.ok) {
-      console.warn("Breached-password check unavailable: HTTP", response.status);
+            logger.warn({ httpStatus: response.status }, "breached-password check unavailable");
       return false;
     }
 
@@ -62,7 +63,7 @@ export async function isPasswordBreached(password: string): Promise<boolean> {
       return hashSuffix === suffix && Number(count) > 0;
     });
   } catch {
-    console.warn("Breached-password check unavailable: network error or timeout");
+        logger.warn("breached-password check unavailable: network error or timeout");
     return false;
   }
 }
