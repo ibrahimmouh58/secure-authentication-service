@@ -4,19 +4,37 @@ import { verifyAccessToken } from "../lib/jwt.js";
 import { findActiveSession } from "../services/session.service.js";
 import { audit } from "../services/audit.service.js";
 
+// L'utilisateur connecté, attaché à la requête par l'authentification
+export type AuthContext = {
+  userId: string;
+  sessionId: string;
+  email: string;
+  role: "USER" | "ADMIN";
+};
+
+// Déclare req.auth à TypeScript. Placée ici (et pas dans un fichier .d.ts séparé)
+// pour être chargée par chaque fichier qui utilise l'authentification.
+declare global {
+  namespace Express {
+    interface Request {
+      auth?: AuthContext;
+    }
+  }
+}
+
 const BEARER_PATTERN = /^Bearer ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/i;
 
 function unauthorized(): AppError {
   return new AppError(401, "UNAUTHORIZED", "Authentication required");
 }
 
-export async function authenticateRequest(req: Request) {
+export async function authenticateRequest(req: Request): Promise<AuthContext> {
   const match = BEARER_PATTERN.exec(req.get("authorization") ?? "");
   if (!match) {
     throw unauthorized();
   }
 
-    let claims;
+  let claims;
   try {
     claims = await verifyAccessToken(match[1]);
   } catch (error) {
@@ -46,11 +64,12 @@ export async function authenticateRequest(req: Request) {
 }
 
 export const requireAuth: RequestHandler = async (req, _res, next) => {
-  req.auth = await authenticateRequest(req);
+  // Réutilise l'authentification déjà faite par le garde global, s'il y en a une
+  req.auth ??= await authenticateRequest(req);
   next();
 };
 
-export function getAuth(req: Request) {
+export function getAuth(req: Request): AuthContext {
   if (!req.auth) {
     throw unauthorized();
   }

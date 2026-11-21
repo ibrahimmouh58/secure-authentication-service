@@ -4,7 +4,6 @@ import { fail } from "../lib/response.js";
 import { logger } from "../lib/logger.js";
 import { getRequestContext } from "../lib/requestContext.js";
 
-
 export const errorHandler: ErrorRequestHandler = (err, _req, res, next) => {
   if (res.headersSent) {
     next(err);
@@ -37,4 +36,6 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, next) => {
     },
     "unhandled error",
   );
+
+  fail(res, 500, "INTERNAL_ERROR", "An unexpected error occurred");
 };
