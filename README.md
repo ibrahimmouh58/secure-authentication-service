@@ -11,11 +11,12 @@ The API listens on **port 7766**.
 
 ## Run it
 
-### 1. Clone
+### 1. Clone and install
 
 ```bash
 git clone https://github.com/ibrahimmouh58/secure-authentication-service.git
 cd secure-authentication-service
+npm ci
 ```
 
 ### 2. Create the `.env` file
@@ -32,7 +33,7 @@ Windows PowerShell:
 Copy-Item .env.example .env
 ```
 
-Then open `.env` and fill it with these local development values:
+Open `.env` and fill it with these local development values:
 
 ```
 PORT=7766
@@ -45,11 +46,29 @@ POSTGRES_PORT=5433
 DATABASE_URL=postgresql://auth:localdevpassword@localhost:5433/auth?schema=public
 
 CORS_ORIGINS=http://localhost:3000
+
+JWT_ISSUER=secure-auth-service
+JWT_AUDIENCE=secure-auth-api
+
+ACCESS_TOKEN_TTL_SECONDS=900
+REFRESH_TOKEN_TTL_SECONDS=1209600
+SESSION_MAX_AGE_SECONDS=2592000
 ```
 
-These credentials are for a local, throwaway database only.
+The database credentials are for a local, throwaway database only.
 
-### 3. Start PostgreSQL
+### 3. Generate the signing keys and the MFA encryption key
+
+```bash
+npm run secrets:generate
+```
+
+This prints three lines: `JWT_PRIVATE_KEY`, `JWT_PUBLIC_KEYS` and `MFA_ENCRYPTION_KEY`.
+Copy them into `.env`, replacing the empty lines with the same names.
+Each variable must appear only once in `.env`.
+These are real secrets: never commit or share them.
+
+### 4. Start PostgreSQL
 
 ```bash
 docker compose up -d
@@ -57,17 +76,16 @@ docker compose up -d
 
 Wait until `docker compose ps` shows the `db` service as `(healthy)`.
 
-### 4. Install, build and start
+### 5. Build and start
 
 ```bash
-npm ci
 npm run build
 npm start
 ```
 
 `npm start` applies all pending database migrations (`prisma migrate deploy`) and only then starts the API.
 
-### 5. Check it works
+### 6. Check it works
 
 ```bash
 curl http://localhost:7766/health
