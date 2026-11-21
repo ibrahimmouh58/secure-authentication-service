@@ -4,6 +4,7 @@ import { signAccessToken } from "../lib/jwt.js";
 import { env } from "../lib/env.js";
 import { AppError } from "../lib/errors.js";
 import { rateLimitByAccount } from "../lib/rateLimit.js";
+import { audit } from "./audit.service.js";
 
 export type ClientInfo = {
   ipAddress?: string;
@@ -65,19 +66,37 @@ export async function rotateRefreshToken(presentedToken: string): Promise<TokenP
   });
 
   if (!stored) {
+    // AUDIT
+    await audit({ event: "auth.refresh", outcome: "FAILURE", reason: "unknown_refresh_token" });
     throw invalidRefreshToken();
   }
 
   const { session } = stored;
-    await rateLimitByAccount("refresh", session.userId);
+  await rateLimitByAccount("refresh", session.userId);
 
   // Rejeu : ce token a déjà été échangé → on révoque toute la famille
   if (stored.usedAt) {
     await revokeSession(session.id, "refresh_token_reuse");
+    // AUDIT : l'événement de sécurité le plus important de l'API
+    await audit({
+      event: "auth.refresh",
+      outcome: "FAILURE",
+      reason: "refresh_token_reuse_family_revoked",
+      userId: session.userId,
+      metadata: { sessionId: session.id },
+    });
     throw invalidRefreshToken();
   }
 
   if (session.revokedAt || session.expiresAt <= now || stored.expiresAt <= now) {
+    // AUDIT
+    await audit({
+      event: "auth.refresh",
+      outcome: "FAILURE",
+      reason: session.revokedAt ? "session_revoked" : "token_or_session_expired",
+      userId: session.userId,
+      metadata: { sessionId: session.id },
+    });
     throw invalidRefreshToken();
   }
 
@@ -107,10 +126,20 @@ export async function rotateRefreshToken(presentedToken: string): Promise<TokenP
   // Deux requêtes simultanées avec le même token : la seconde perd → rejeu
   if (!rotated) {
     await revokeSession(session.id, "refresh_token_reuse");
+    // AUDIT
+    await audit({
+      event: "auth.refresh",
+      outcome: "FAILURE",
+      reason: "concurrent_reuse_family_revoked",
+      userId: session.userId,
+      metadata: { sessionId: session.id },
+    });
     throw invalidRefreshToken();
   }
 
   const accessToken = await signAccessToken(session.userId, session.id);
+  // AUDIT
+  await audit({ event: "auth.refresh", outcome: "SUCCESS", userId: session.userId, metadata: { sessionId: session.id } });
   return { accessToken, refreshToken: newRefreshToken, sessionId: session.id };
 }
 
@@ -123,7 +152,7 @@ export async function revokeSession(sessionId: string, reason: string): Promise<
   });
 }
 
-// --- 4. Révoquer toutes les sessions d'un utilisateur (logout-all, changement de mot de passe) ---
+// --- 4. Révoquer toutes les sessions d'un utilisateur ---
 
 export async function revokeAllSessions(userId: string, reason: string): Promise<number> {
   const result = await prisma.session.updateMany({

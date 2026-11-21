@@ -2,6 +2,7 @@ import type { RequestHandler } from "express";
 import { prisma } from "./prisma.js";
 import { sha256 } from "./crypto.js";
 import { AppError } from "./errors.js";
+import { audit } from "../services/audit.service.js";
 
 type Limit = { limit: number; windowSeconds: number };
 
@@ -40,6 +41,14 @@ export async function consumeRateLimit(key: string, { limit, windowSeconds }: Li
 
   if (row && row.count > limit) {
     const retryAfter = Math.max(1, Math.ceil((row.resetAt.getTime() - now.getTime()) / 1000));
+    // AUDIT : "login:ip:..." donne scope=login, dimension=ip
+    const [scope, dimension] = key.split(":");
+    await audit({
+      event: "rate_limit",
+      outcome: "FAILURE",
+      reason: "limit_exceeded",
+      metadata: { scope: scope ?? null, dimension: dimension ?? null, count: row.count, limit },
+    });
     throw new AppError(429, "TOO_MANY_REQUESTS", "Too many requests, please try again later", {
       "Retry-After": String(retryAfter),
     });

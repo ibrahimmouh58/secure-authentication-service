@@ -2,6 +2,7 @@ import { Router } from "express";
 import { env } from "../lib/env.js";
 import { AppError } from "../lib/errors.js";
 import { logger } from "../lib/logger.js";
+import { sha256 } from "../lib/crypto.js";
 import { ok } from "../lib/response.js";
 import { parseBody } from "../lib/validation.js";
 import { getClientInfo } from "../lib/client.js";
@@ -17,6 +18,7 @@ import {
   registerSchema,
   resetPasswordSchema,
 } from "../schemas/auth.schemas.js";
+import { audit } from "../services/audit.service.js";
 import { loginUser, registerUser } from "../services/auth.service.js";
 import {
   completeMfaChallenge,
@@ -53,6 +55,13 @@ authRouter.post("/register", rateLimitByIp("register"), async (req, res) => {
   await rateLimitByAccount("register", body.email);
 
   if (body.role === "ADMIN") {
+    // AUDIT : tentative d'escalade de privilèges
+    await audit({
+      event: "auth.register",
+      outcome: "FAILURE",
+      reason: "admin_self_registration_denied",
+      metadata: { emailHash: sha256(body.email) },
+    });
     throw new AppError(403, "FORBIDDEN", "Self-registration as ADMIN is not allowed");
   }
 
@@ -86,6 +95,10 @@ authRouter.post("/refresh", rateLimitByIp("refresh"), async (req, res) => {
 authRouter.post("/logout", requireAuth, async (req, res) => {
   const auth = getAuth(req);
   await revokeSession(auth.sessionId, "logout");
+
+  // AUDIT
+  await audit({ event: "auth.logout", outcome: "SUCCESS", userId: auth.userId, metadata: { sessionId: auth.sessionId } });
+
   ok(res, { loggedOut: true });
 });
 
@@ -93,6 +106,10 @@ authRouter.post("/logout", requireAuth, async (req, res) => {
 authRouter.post("/logout-all", requireAuth, async (req, res) => {
   const auth = getAuth(req);
   const revokedSessions = await revokeAllSessions(auth.userId, "logout_all");
+
+  // AUDIT
+  await audit({ event: "auth.logout_all", outcome: "SUCCESS", userId: auth.userId, metadata: { revokedSessions } });
+
   ok(res, { revokedSessions });
 });
 

@@ -6,19 +6,32 @@ import { generateToken, sha256 } from "../lib/crypto.js";
 import { sendMail } from "../lib/mailer.js";
 import { rateLimitByAccount } from "../lib/rateLimit.js";
 import { assertPasswordNotBreached, hashPassword, verifyPassword } from "../lib/password.js";
+import { audit, type AuditEvent } from "./audit.service.js";
 import { createSession, type ClientInfo, type TokenPair } from "./session.service.js";
 
 function invalidResetToken(): AppError {
   return new AppError(400, "INVALID_TOKEN", "Invalid or expired reset token");
 }
 
-// Applique un nouveau mot de passe et invalide TOUT ce qui était lié à l'ancien
+// Vérifie le mot de passe contre HIBP, en auditant un éventuel refus
+async function assertNotBreachedWithAudit(password: string, event: AuditEvent, userId: string): Promise<void> {
+  try {
+    await assertPasswordNotBreached(password);
+  } catch (error) {
+    // AUDIT
+    await audit({ event, outcome: "FAILURE", reason: "breached_password", userId });
+    throw error;
+  }
+}
+
+// Applique un nouveau mot de passe et invalide TOUT ce qui était lié à l'ancien.
+// Renvoie le nombre de sessions révoquées.
 async function applyNewPassword(
   tx: Prisma.TransactionClient,
   userId: string,
   passwordHash: string,
   reason: string,
-): Promise<void> {
+): Promise<number> {
   const now = new Date();
 
   await tx.user.update({
@@ -31,10 +44,12 @@ async function applyNewPassword(
     data: { usedAt: now },
   });
 
-  await tx.session.updateMany({
+  const revoked = await tx.session.updateMany({
     where: { userId, revokedAt: null },
     data: { revokedAt: now, revokedReason: reason },
   });
+
+  return revoked.count;
 }
 
 // --- 1. Demande de reset (appelée en arrière-plan) ---
@@ -42,6 +57,13 @@ async function applyNewPassword(
 export async function requestPasswordReset(email: string): Promise<void> {
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) {
+    // AUDIT
+    await audit({
+      event: "auth.password.forgot",
+      outcome: "FAILURE",
+      reason: "unknown_email",
+      metadata: { emailHash: sha256(email) },
+    });
     return;
   }
 
@@ -69,6 +91,9 @@ export async function requestPasswordReset(email: string): Promise<void> {
     "Reset your password",
     `Use this token to reset your password. It expires in ${minutes} minutes and can be used once.\n\nReset token: ${token}\n\nIf you did not request this, you can ignore this email.`,
   );
+
+  // AUDIT
+  await audit({ event: "auth.password.forgot", outcome: "SUCCESS", reason: "reset_token_issued", userId: user.id });
 }
 
 // --- 2. Reset avec le token ---
@@ -79,32 +104,48 @@ export async function resetPassword(token: string, newPassword: string): Promise
   });
 
   if (!stored || stored.usedAt || stored.expiresAt <= new Date()) {
+    // AUDIT
+    await audit({
+      event: "auth.password.reset",
+      outcome: "FAILURE",
+      reason: !stored ? "unknown_token" : stored.usedAt ? "token_already_used" : "token_expired",
+      userId: stored?.userId ?? null,
+    });
     throw invalidResetToken();
   }
 
   await rateLimitByAccount("passwordReset", stored.userId);
 
   // Vérifié AVANT de consommer le token : si le mot de passe est refusé, le lien reste utilisable
-  await assertPasswordNotBreached(newPassword);
+  await assertNotBreachedWithAudit(newPassword, "auth.password.reset", stored.userId);
   const passwordHash = await hashPassword(newPassword);
 
-  const applied = await prisma.$transaction(async (tx) => {
+  const revokedSessions = await prisma.$transaction(async (tx) => {
     const claimed = await tx.passwordResetToken.updateMany({
       where: { id: stored.id, usedAt: null, expiresAt: { gt: new Date() } },
       data: { usedAt: new Date() },
     });
 
     if (claimed.count !== 1) {
-      return false;
+      return null;
     }
 
-    await applyNewPassword(tx, stored.userId, passwordHash, "password_reset");
-    return true;
+    return applyNewPassword(tx, stored.userId, passwordHash, "password_reset");
   });
 
-  if (!applied) {
+  if (revokedSessions === null) {
+    // AUDIT
+    await audit({ event: "auth.password.reset", outcome: "FAILURE", reason: "concurrent_token_use", userId: stored.userId });
     throw invalidResetToken();
   }
+
+  // AUDIT
+  await audit({
+    event: "auth.password.reset",
+    outcome: "SUCCESS",
+    userId: stored.userId,
+    metadata: { revokedSessions },
+  });
 }
 
 // --- 3. Changement de mot de passe (utilisateur connecté) ---
@@ -118,16 +159,27 @@ export async function changePassword(
   const user = await prisma.user.findUnique({ where: { id: userId } });
 
   if (!user || !(await verifyPassword(user.passwordHash, currentPassword))) {
+    // AUDIT
+    await audit({ event: "auth.password.change", outcome: "FAILURE", reason: "invalid_current_password", userId });
     throw new AppError(401, "UNAUTHORIZED", "Current password is incorrect");
   }
 
-  await assertPasswordNotBreached(newPassword);
+  await assertNotBreachedWithAudit(newPassword, "auth.password.change", userId);
   const passwordHash = await hashPassword(newPassword);
 
-  await prisma.$transaction(async (tx) => {
-    await applyNewPassword(tx, userId, passwordHash, "password_change");
+  const revokedSessions = await prisma.$transaction(async (tx) => {
+    return applyNewPassword(tx, userId, passwordHash, "password_change");
   });
 
   // Toutes les anciennes sessions sont révoquées ; on en ouvre une NOUVELLE pour ce client
-  return createSession(userId, client);
+  const tokens = await createSession(userId, client);
+
+  // AUDIT
+  await audit({
+    event: "auth.password.change",
+    outcome: "SUCCESS",
+    userId,
+    metadata: { revokedSessions, newSessionId: tokens.sessionId },
+  });
+  return tokens;
 }
