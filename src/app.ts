@@ -4,6 +4,7 @@ import cors from "cors";
 import { env } from "./lib/env.js";
 import { ok, fail } from "./lib/response.js";
 import { errorHandler } from "./middleware/errorHandler.js";
+import { authRouter } from "./routes/auth.routes.js";
 
 export const app = express();
 
@@ -54,6 +55,7 @@ app.use(express.json({ limit: "10kb" }));
 app.get("/health", (_req, res) => {
   ok(res, { status: "ok" });
 });
+app.use("/api/v1/auth", authRouter);
 
 // 5. Route inconnue → 404
 app.use((_req, res) => {
