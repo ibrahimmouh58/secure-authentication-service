@@ -5,7 +5,15 @@ import { ok } from "../lib/response.js";
 import { parseBody } from "../lib/validation.js";
 import { getClientInfo } from "../lib/client.js";
 import { getAuth, requireAuth } from "../middleware/requireAuth.js";
-import { loginSchema, refreshSchema, registerSchema } from "../schemas/auth.schemas.js";
+import {
+  changePasswordSchema,
+  forgotPasswordSchema,
+  loginSchema,
+  refreshSchema,
+  registerSchema,
+  resetPasswordSchema,
+} from "../schemas/auth.schemas.js";
+import { changePassword, requestPasswordReset, resetPassword } from "../services/password.service.js";
 import { loginUser, registerUser } from "../services/auth.service.js";
 import { rateLimitByAccount, rateLimitByIp } from "../lib/rateLimit.js";
 import {
@@ -73,4 +81,34 @@ authRouter.post("/logout-all", requireAuth, async (req, res) => {
 authRouter.get("/me", requireAuth, (req, res) => {
   const auth = getAuth(req);
   ok(res, { id: auth.userId, email: auth.email, role: auth.role });
+});
+
+// POST /api/v1/auth/password/forgot → 200 (toujours la même réponse)
+authRouter.post("/password/forgot", rateLimitByIp("passwordForgot"), async (req, res) => {
+  const body = parseBody(forgotPasswordSchema, req.body);
+  await rateLimitByAccount("passwordForgot", body.email);
+
+  // Le travail se fait APRÈS la réponse : le temps de réponse ne dépend pas de l'existence du compte
+  void requestPasswordReset(body.email).catch((error: unknown) => {
+    console.error("Password reset request failed:", error instanceof Error ? error.name : "unknown error");
+  });
+
+  ok(res, { message: "If an account exists for this email, a reset token has been sent." });
+});
+
+// POST /api/v1/auth/password/reset → 200
+authRouter.post("/password/reset", rateLimitByIp("passwordReset"), async (req, res) => {
+  const body = parseBody(resetPasswordSchema, req.body);
+  await resetPassword(body.token, body.newPassword);
+  ok(res, { passwordReset: true });
+});
+
+// POST /api/v1/auth/password/change → 200 (authentifiée, renvoie de nouveaux tokens)
+authRouter.post("/password/change", rateLimitByIp("passwordChange"), requireAuth, async (req, res) => {
+  const auth = getAuth(req);
+  const body = parseBody(changePasswordSchema, req.body);
+  await rateLimitByAccount("passwordChange", auth.userId);
+
+  const tokens = await changePassword(auth.userId, body.currentPassword, body.newPassword, getClientInfo(req));
+  ok(res, toTokenResponse(tokens));
 });

@@ -3,7 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { AppError } from "../lib/errors.js";
 import {
   hashPassword,
-  isPasswordBreached,
+  assertPasswordNotBreached,
   verifyAgainstDummyHash,
   verifyPassword,
 } from "../lib/password.js";
@@ -56,14 +56,7 @@ async function clearFailedLogins(userId: string): Promise<void> {
 export async function registerUser(email: string, password: string): Promise<PublicUser> {
   // Le travail coûteux est fait AVANT de savoir si l'email existe :
   // un doublon et un nouvel email prennent le même temps.
-  if (await isPasswordBreached(password)) {
-    throw new AppError(
-      400,
-      "WEAK_PASSWORD",
-      "This password appears in a known data breach. Please choose another one.",
-    );
-  }
-
+  await assertPasswordNotBreached(password);
   const passwordHash = await hashPassword(password);
 
   try {

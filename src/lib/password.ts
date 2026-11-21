@@ -1,6 +1,7 @@
 import * as argon2 from "argon2";
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { AppError } from "./errors.js";
 
 // --- 1. Hachage argon2id ---
 
@@ -63,5 +64,15 @@ export async function isPasswordBreached(password: string): Promise<boolean> {
   } catch {
     console.warn("Breached-password check unavailable: network error or timeout");
     return false;
+  }
+}
+
+export async function assertPasswordNotBreached(password: string): Promise<void> {
+  if (await isPasswordBreached(password)) {
+    throw new AppError(
+      400,
+      "WEAK_PASSWORD",
+      "This password appears in a known data breach. Please choose another one.",
+    );
   }
 }

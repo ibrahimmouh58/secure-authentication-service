@@ -44,6 +44,7 @@ const envSchema = z.object({
   ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   REFRESH_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(1209600),
   SESSION_MAX_AGE_SECONDS: z.coerce.number().int().positive().default(2592000),
+  RESET_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
 
   MFA_ENCRYPTION_KEY: z
     .string()
