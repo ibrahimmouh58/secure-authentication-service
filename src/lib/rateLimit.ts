@@ -13,6 +13,7 @@ export const RATE_LIMITS = {
   passwordForgot: { ip: { limit: 10, windowSeconds: 900 }, account: { limit: 3, windowSeconds: 900 } },
   passwordReset: { ip: { limit: 10, windowSeconds: 900 }, account: { limit: 5, windowSeconds: 900 } },
   passwordChange: { ip: { limit: 10, windowSeconds: 900 }, account: { limit: 5, windowSeconds: 900 } },
+  mfaVerify: { ip: { limit: 30, windowSeconds: 900 }, account: { limit: 10, windowSeconds: 900 } },
 } satisfies Record<string, { ip: Limit; account: Limit }>;
 
 type Scope = keyof typeof RATE_LIMITS;
