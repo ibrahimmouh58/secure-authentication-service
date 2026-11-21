@@ -8,6 +8,7 @@ import {
   verifyPassword,
 } from "../lib/password.js";
 import { createSession, type ClientInfo, type TokenPair } from "./session.service.js";
+import { createMfaChallenge } from "./mfa.service.js";
 
 export type PublicUser = {
   id: string;
@@ -73,13 +74,19 @@ export async function registerUser(email: string, password: string): Promise<Pub
 }
 
 // --- Connexion ---
+export type LoginResult =
+  | { mfaRequired: false; tokens: TokenPair }
+  | { mfaRequired: true; mfaToken: string };
 
 export async function loginUser(
   email: string,
   password: string,
   client: ClientInfo,
-): Promise<TokenPair> {
-  const user = await prisma.user.findUnique({ where: { email } });
+): Promise<LoginResult> {
+  const user = await prisma.user.findUnique({
+    where: { email },
+    include: { mfaSecret: { select: { confirmedAt: true } } },
+  });
 
   if (!user) {
     // Même coût qu'une vraie vérification : le temps de réponse ne trahit rien
@@ -106,6 +113,10 @@ export async function loginUser(
     await clearFailedLogins(user.id);
   }
 
-  // Étape 10 : MFA. Étape 12 : audit.
-  return createSession(user.id, client);
+    // Mot de passe correct : si la MFA est active, on demande le second facteur
+  if (user.mfaSecret?.confirmedAt) {
+    return { mfaRequired: true, mfaToken: await createMfaChallenge(user.id, client) };
+  }
+
+  return { mfaRequired: false, tokens: await createSession(user.id, client) };
 }

@@ -4,18 +4,26 @@ import { AppError } from "../lib/errors.js";
 import { ok } from "../lib/response.js";
 import { parseBody } from "../lib/validation.js";
 import { getClientInfo } from "../lib/client.js";
-import { getAuth, requireAuth } from "../middleware/requireAuth.js";
+import { rateLimitByAccount, rateLimitByIp } from "../lib/rateLimit.js";
+import { authenticateRequest, getAuth, requireAuth } from "../middleware/requireAuth.js";
 import {
   changePasswordSchema,
   forgotPasswordSchema,
   loginSchema,
+  mfaChallengeSchema,
+  mfaConfirmSchema,
   refreshSchema,
   registerSchema,
   resetPasswordSchema,
 } from "../schemas/auth.schemas.js";
-import { changePassword, requestPasswordReset, resetPassword } from "../services/password.service.js";
 import { loginUser, registerUser } from "../services/auth.service.js";
-import { rateLimitByAccount, rateLimitByIp } from "../lib/rateLimit.js";
+import {
+  completeMfaChallenge,
+  confirmMfaEnrollment,
+  enrollMfa,
+  MFA_CHALLENGE_TTL_SECONDS,
+} from "../services/mfa.service.js";
+import { changePassword, requestPasswordReset, resetPassword } from "../services/password.service.js";
 import {
   revokeAllSessions,
   revokeSession,
@@ -34,6 +42,10 @@ function toTokenResponse(tokens: TokenPair) {
   };
 }
 
+// ============================================================
+// Inscription, connexion, tokens
+// ============================================================
+
 // POST /api/v1/auth/register → 201
 authRouter.post("/register", rateLimitByIp("register"), async (req, res) => {
   const body = parseBody(registerSchema, req.body);
@@ -47,13 +59,19 @@ authRouter.post("/register", rateLimitByIp("register"), async (req, res) => {
   ok(res, user, 201);
 });
 
-// POST /api/v1/auth/login → 200
+// POST /api/v1/auth/login → 200 (tokens, ou challenge MFA)
 authRouter.post("/login", rateLimitByIp("login"), async (req, res) => {
   const body = parseBody(loginSchema, req.body);
   await rateLimitByAccount("login", body.email);
 
-  const tokens = await loginUser(body.email, body.password, getClientInfo(req));
-  ok(res, toTokenResponse(tokens));
+  const result = await loginUser(body.email, body.password, getClientInfo(req));
+
+  if (result.mfaRequired) {
+    ok(res, { mfaRequired: true, mfaToken: result.mfaToken, expiresIn: MFA_CHALLENGE_TTL_SECONDS });
+    return;
+  }
+
+  ok(res, toTokenResponse(result.tokens));
 });
 
 // POST /api/v1/auth/refresh → 200
@@ -83,6 +101,10 @@ authRouter.get("/me", requireAuth, (req, res) => {
   ok(res, { id: auth.userId, email: auth.email, role: auth.role });
 });
 
+// ============================================================
+// Mot de passe
+// ============================================================
+
 // POST /api/v1/auth/password/forgot → 200 (toujours la même réponse)
 authRouter.post("/password/forgot", rateLimitByIp("passwordForgot"), async (req, res) => {
   const body = parseBody(forgotPasswordSchema, req.body);
@@ -111,4 +133,35 @@ authRouter.post("/password/change", rateLimitByIp("passwordChange"), requireAuth
 
   const tokens = await changePassword(auth.userId, body.currentPassword, body.newPassword, getClientInfo(req));
   ok(res, toTokenResponse(tokens));
+});
+
+// ============================================================
+// MFA
+// ============================================================
+
+// POST /api/v1/auth/mfa/enroll → 200 (authentifiée)
+authRouter.post("/mfa/enroll", requireAuth, async (req, res) => {
+  const auth = getAuth(req);
+  const enrollment = await enrollMfa(auth.userId, auth.email);
+  ok(res, enrollment);
+});
+
+// POST /api/v1/auth/mfa/verify → 200
+//   - { mfaToken, code | recoveryCode }  : termine un login (sans access token)
+//   - { code } + Bearer                  : confirme l'activation de la MFA
+authRouter.post("/mfa/verify", rateLimitByIp("mfaVerify"), async (req, res) => {
+  const isLoginChallenge = typeof req.body === "object" && req.body !== null && "mfaToken" in req.body;
+
+  if (isLoginChallenge) {
+    const body = parseBody(mfaChallengeSchema, req.body);
+    const tokens = await completeMfaChallenge(body, getClientInfo(req));
+    ok(res, toTokenResponse(tokens));
+    return;
+  }
+
+  const auth = await authenticateRequest(req);
+  await rateLimitByAccount("mfaVerify", auth.userId);
+  const body = parseBody(mfaConfirmSchema, req.body);
+  await confirmMfaEnrollment(auth.userId, body.code);
+  ok(res, { mfaEnabled: true });
 });

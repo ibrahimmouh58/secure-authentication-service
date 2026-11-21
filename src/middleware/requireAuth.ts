@@ -9,30 +9,29 @@ function unauthorized(): AppError {
   return new AppError(401, "UNAUTHORIZED", "Authentication required");
 }
 
-export const requireAuth: RequestHandler = async (req, _res, next) => {
-  // 1. Lire l'en-tête "Authorization: Bearer <token>"
+export async function authenticateRequest(req: Request) {
   const match = BEARER_PATTERN.exec(req.get("authorization") ?? "");
   if (!match) {
     throw unauthorized();
   }
 
-  // 2. Vérifier la signature et les claims du JWT
   const claims = await verifyAccessToken(match[1]);
 
-  // 3. Vérifier que la session existe encore et n'est pas révoquée
   const session = await findActiveSession(claims.sessionId);
   if (!session || session.userId !== claims.userId) {
     throw unauthorized();
   }
 
-  // 4. Attacher l'utilisateur connecté à la requête
-  req.auth = {
+  return {
     userId: session.user.id,
     sessionId: session.id,
     email: session.user.email,
     role: session.user.role,
   };
+}
 
+export const requireAuth: RequestHandler = async (req, _res, next) => {
+  req.auth = await authenticateRequest(req);
   next();
 };
 

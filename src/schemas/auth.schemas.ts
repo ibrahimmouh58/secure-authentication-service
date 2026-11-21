@@ -31,3 +31,19 @@ export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1).max(128),
   newPassword: passwordSchema,
 });
+
+const totpCodeSchema = z.string().regex(/^\d{6}$/);
+
+export const mfaConfirmSchema = z.object({
+  code: totpCodeSchema,
+});
+
+export const mfaChallengeSchema = z
+  .object({
+    mfaToken: z.string().min(1).max(512),
+    code: totpCodeSchema.optional(),
+    recoveryCode: z.string().min(1).max(64).optional(),
+  })
+  .refine((body) => (body.code === undefined) !== (body.recoveryCode === undefined), {
+    message: "Provide exactly one of code or recoveryCode",
+  });
