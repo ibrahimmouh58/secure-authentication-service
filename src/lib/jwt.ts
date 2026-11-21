@@ -62,6 +62,6 @@ export async function verifyAccessToken(token: string): Promise<AccessTokenClaim
 
     return { userId: payload.sub, sessionId: payload.sid, tokenId: payload.jti };
   } catch {
-    throw new AppError(401, "UNAUTHORIZED", "Invalid or expired access token");
+    throw new AppError(401, "UNAUTHORIZED", "Authentication required");
   }
 }
