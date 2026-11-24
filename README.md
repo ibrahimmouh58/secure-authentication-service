@@ -110,6 +110,8 @@ Expected response:
 {"success":true,"data":{"status":"ok"}}
 ```
 
+To call every route by hand, see [Request examples](#request-examples) below.
+
 ---
 
 ## Connecting to the database
@@ -173,99 +175,392 @@ There is no mail server. Outside production, each email is written as a text fil
 
 ---
 
-## Creating an admin
+## Request examples
 
-Public registration never creates admins. An operator with access to the server creates or promotes one:
+The 13 routes of the assignment, in the order of the assignment, plus `GET /api/v1/users/:id`.
+Each route has a command for **macOS / Linux** (bash or zsh) and one for **Windows PowerShell**.
 
-```bash
-npm run admin:create -- admin@example.com
-```
+Run everything **from the project root, in the same terminal, in this order**: later commands reuse the tokens,
+ids and reset token kept in variables by earlier ones. Nothing needs to be copied by hand except the MFA code.
+Each run uses a new email address, so the examples can be repeated.
 
-- If the user already exists, it is promoted to `ADMIN`.
-- Otherwise an admin account is created and a temporary password is printed once.
+### 0. Helpers (paste once)
 
-Roles are read from the database on every request, so a promotion or demotion takes effect immediately.
+A small helper sends the request, prints the HTTP status and the response body, and keeps the response.
 
----
-
-## Running the tests
-
-With PostgreSQL running (`docker compose up -d`) and `.env` filled in:
+macOS / Linux:
 
 ```bash
-npm test
+API=http://localhost:7766
+
+# call METHOD PATH [JSON_BODY] [ACCESS_TOKEN]
+call() {
+  local args=(-s -X "$1" "$API$2" -H "Content-Type: application/json" -w '\n%{http_code}')
+  if [ -n "$3" ]; then args+=(-d "$3"); fi
+  if [ -n "$4" ]; then args+=(-H "Authorization: Bearer $4"); fi
+  local out
+  out=$(curl "${args[@]}")
+  STATUS=${out##*$'\n'}
+  BODY=${out%$'\n'*}
+  echo "HTTP $STATUS  $BODY"
+}
+# field NAME → value of "NAME" in the last response
+field() { printf '%s' "$BODY" | sed -nE "s/.*\"$1\":\"([^\"]*)\".*/\1/p"; }
+
+EMAIL="alice-$(date +%s)@example.com"
+PASSWORD="walkthrough-$(date +%s)-passphrase"
 ```
 
-The tests run against a separate database, `auth_test`, on the same PostgreSQL server.
-It is created automatically on the first run, and all migrations are applied to it before the tests start.
-The development database (`auth`) is never touched. The breached-password tests need network access to HIBP.
+Windows PowerShell:
+
+```powershell
+# api METHOD PATH [@{ body }] [ACCESS_TOKEN]
+function api {
+  param($Method, $Path, $Body, $Token)
+  $headers = @{}
+  if ($Token) { $headers["Authorization"] = "Bearer $Token" }
+  $params = @{ Method = $Method; Uri = "http://localhost:7766$Path"; Headers = $headers; UseBasicParsing = $true }
+  if ($Body) { $params.Body = ($Body | ConvertTo-Json -Compress); $params.ContentType = "application/json" }
+  try {
+    $res = Invoke-WebRequest @params
+    Write-Host "HTTP $($res.StatusCode)" -ForegroundColor Green
+    return $res.Content | ConvertFrom-Json
+  } catch {
+    Write-Host "HTTP $([int]$_.Exception.Response.StatusCode)" -ForegroundColor Yellow
+    return $_.ErrorDetails.Message | ConvertFrom-Json
+  }
+}
+function show($x) { $x | ConvertTo-Json -Depth 6 }
+
+$email = "alice-$(Get-Random)@example.com"
+$password = "walkthrough-" + [guid]::NewGuid()
+```
+
+If you get `429 TOO_MANY_REQUESTS`, that is the rate limiter: wait 15 minutes, or run
+`docker compose exec db psql -U auth -d auth -c 'DELETE FROM "RateLimit";'`.
 
 ---
 
-## Key rotation
+### GET /health
 
-### JWT signing key (no one is logged out)
-
-Access tokens carry a `kid` header. The API signs with one key (`JWT_PRIVATE_KEY`) and verifies
-against every key in `JWT_PUBLIC_KEYS`. Refresh tokens are opaque and do not depend on the signing key.
-
-1. Generate a new key pair: `npm run secrets:generate`. Keep only the two `JWT_*` lines it prints.
-2. **Add** the new public key to the existing `JWT_PUBLIC_KEYS` array (keep the old one):
-   `JWT_PUBLIC_KEYS='[{...old...},{...new...}]'`. Deploy or restart.
-   Every instance can now verify tokens signed with either key.
-3. Replace `JWT_PRIVATE_KEY` with the new private key. Deploy or restart.
-   New access tokens are signed with the new key; existing ones are still accepted.
-4. After `ACCESS_TOKEN_TTL_SECONDS` (15 minutes), every token signed with the old key has expired.
-   Remove the old public key from `JWT_PUBLIC_KEYS`. Deploy or restart.
-
-The API refuses to start if the active private key's public half is not in `JWT_PUBLIC_KEYS`.
-
-**If a signing key is compromised**, do steps 1 to 3 and remove the old public key immediately.
-All access tokens signed with it become invalid at once; clients call `/auth/refresh` with their
-still-valid refresh token and get a token signed with the new key. Nobody has to log in again.
-
-### MFA encryption key
-
-TOTP secrets are encrypted with AES-256-GCM under `MFA_ENCRYPTION_KEY`. Ciphertexts are versioned
-(`v1:...`), but there is no automated re-encryption job yet: rotating this key today means
-re-encrypting every row of `MfaSecret`. See NOTES.md ("What I skipped").
-
-### Database password
-
-Change `POSTGRES_PASSWORD` and `DATABASE_URL` together. For an existing volume, also change the
-password inside PostgreSQL (`ALTER USER auth PASSWORD '...'`), since the image only applies
-`POSTGRES_PASSWORD` when the volume is first created.
-
----
-
-## Resetting the database
+Unauthenticated → `200`.
 
 ```bash
-docker compose down -v
-docker compose up -d
-npm start
+call GET /health
 ```
 
-`down -v` deletes the database volume. `npm start` then re-applies every migration to the empty database.
+```powershell
+show (api GET /health)
+```
 
 ---
 
-## Project layout
+### POST /api/v1/auth/register
 
+`{ email, password, role? }` → `201`. Self-registration as `ADMIN` → `403`.
+
+```bash
+call POST /api/v1/auth/register "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}"
+call POST /api/v1/auth/register "{\"email\":\"mallory-$(date +%s)@example.com\",\"password\":\"$PASSWORD\",\"role\":\"ADMIN\"}"
 ```
-prisma/
-  schema.prisma          Database schema
-  migrations/            Committed SQL migrations
-scripts/
-  generate-secrets.ts    Ed25519 signing key + MFA encryption key
-  create-admin.ts        Operator-only admin bootstrap
-src/
-  app.ts                 Express app: middleware order, routers
-  server.ts              Starts the HTTP server on PORT
-  lib/                   env, jwt, password, crypto, totp, encryption, rate limiting, logger
-  middleware/            deny-by-default, auth, roles, request context, request logger, errors
-  routes/                /api/v1/auth and /api/v1/users
-  schemas/               zod request schemas
-  services/              sessions, auth, password, MFA, audit
-tests/                   vitest + supertest suite (separate auth_test database)
+
+```powershell
+show (api POST /api/v1/auth/register @{ email = $email; password = $password })
+show (api POST /api/v1/auth/register @{ email = "mallory-$(Get-Random)@example.com"; password = $password; role = "ADMIN" })
+```
+
+---
+
+### POST /api/v1/auth/login
+
+`{ email, password }` → `200` with `accessToken` and `refreshToken`. A wrong password and an unknown email return the same `401`.
+
+```bash
+call POST /api/v1/auth/login "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}"
+ACCESS=$(field accessToken); REFRESH=$(field refreshToken)
+
+call POST /api/v1/auth/login "{\"email\":\"$EMAIL\",\"password\":\"wrong-password-123\"}"
+call POST /api/v1/auth/login '{"email":"nobody@example.com","password":"wrong-password-123"}'
+```
+
+```powershell
+$login = api POST /api/v1/auth/login @{ email = $email; password = $password }
+show $login
+$access = $login.data.accessToken; $refresh = $login.data.refreshToken
+
+show (api POST /api/v1/auth/login @{ email = $email; password = "wrong-password-123" })
+show (api POST /api/v1/auth/login @{ email = "nobody@example.com"; password = "wrong-password-123" })
+```
+
+---
+
+### POST /api/v1/auth/refresh
+
+`{ refreshToken }` → `200` with a new pair. Replaying the old refresh token → `401`, and the whole session is revoked:
+the new refresh token is rejected too.
+
+```bash
+call POST /api/v1/auth/refresh "{\"refreshToken\":\"$REFRESH\"}"
+NEW_REFRESH=$(field refreshToken)
+
+call POST /api/v1/auth/refresh "{\"refreshToken\":\"$REFRESH\"}"         # 401: replay
+call POST /api/v1/auth/refresh "{\"refreshToken\":\"$NEW_REFRESH\"}"     # 401: family revoked
+
+# Log in again for the next steps
+call POST /api/v1/auth/login "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}"
+ACCESS=$(field accessToken)
+```
+
+```powershell
+$rotated = api POST /api/v1/auth/refresh @{ refreshToken = $refresh }
+show $rotated
+
+show (api POST /api/v1/auth/refresh @{ refreshToken = $refresh })                        # 401: replay
+show (api POST /api/v1/auth/refresh @{ refreshToken = $rotated.data.refreshToken })      # 401: family revoked
+
+# Log in again for the next steps
+$access = (api POST /api/v1/auth/login @{ email = $email; password = $password }).data.accessToken
+```
+
+---
+
+### POST /api/v1/auth/logout
+
+Authenticated → `200`. The current session is revoked immediately.
+
+```bash
+call POST /api/v1/auth/logout "" "$ACCESS"
+call GET /api/v1/auth/me "" "$ACCESS"                                    # 401
+
+call POST /api/v1/auth/login "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}"
+ACCESS=$(field accessToken)
+```
+
+```powershell
+show (api POST /api/v1/auth/logout -Token $access)
+show (api GET /api/v1/auth/me -Token $access)                            # 401
+
+$access = (api POST /api/v1/auth/login @{ email = $email; password = $password }).data.accessToken
+```
+
+---
+
+### POST /api/v1/auth/logout-all
+
+Authenticated → `200` with `{ revokedSessions }`. Every session of the user is revoked.
+
+```bash
+call POST /api/v1/auth/login "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}"
+OTHER=$(field accessToken)
+call POST /api/v1/auth/logout-all "" "$ACCESS"
+call GET /api/v1/auth/me "" "$OTHER"                                     # 401: the other session is revoked too
+
+call POST /api/v1/auth/login "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}"
+ACCESS=$(field accessToken)
+```
+
+```powershell
+$other = (api POST /api/v1/auth/login @{ email = $email; password = $password }).data.accessToken
+show (api POST /api/v1/auth/logout-all -Token $access)
+show (api GET /api/v1/auth/me -Token $other)                             # 401: the other session is revoked too
+
+$access = (api POST /api/v1/auth/login @{ email = $email; password = $password }).data.accessToken
+```
+
+---
+
+### GET /api/v1/auth/me
+
+Authenticated → `200` with `data: { id, email, role }`. Without a token → `401`.
+
+```bash
+call GET /api/v1/auth/me "" "$ACCESS"
+MY_ID=$(field id)
+call GET /api/v1/auth/me
+```
+
+```powershell
+$me = api GET /api/v1/auth/me -Token $access
+show $me
+$myId = $me.data.id
+show (api GET /api/v1/auth/me)
+```
+
+---
+
+### POST /api/v1/auth/password/forgot
+
+`{ email }` → always the same `200`. In development, the reset token is written to `mail-outbox/`.
+
+```bash
+call POST /api/v1/auth/password/forgot "{\"email\":\"$EMAIL\"}"
+call POST /api/v1/auth/password/forgot '{"email":"nobody@example.com"}'
+sleep 1
+MAIL="mail-outbox/$(ls -t mail-outbox | head -1)"; cat "$MAIL"
+RESET_TOKEN=$(sed -n 's/^Reset token: //p' "$MAIL")
+```
+
+```powershell
+show (api POST /api/v1/auth/password/forgot @{ email = $email })
+show (api POST /api/v1/auth/password/forgot @{ email = "nobody@example.com" })
+Start-Sleep 1
+$mail = Get-ChildItem mail-outbox | Sort-Object LastWriteTime | Select-Object -Last 1
+Get-Content $mail.FullName
+$resetToken = (Select-String -Path $mail.FullName -Pattern '^Reset token: (.+)$').Matches[0].Groups[1].Value
+```
+
+---
+
+### POST /api/v1/auth/password/reset
+
+`{ token, newPassword }` → `200`. The token works once (`400` if reused). Every session is revoked.
+
+```bash
+NEW_PASSWORD="walkthrough-reset-$(date +%s)-passphrase"
+call POST /api/v1/auth/password/reset "{\"token\":\"$RESET_TOKEN\",\"newPassword\":\"$NEW_PASSWORD\"}"
+call POST /api/v1/auth/password/reset "{\"token\":\"$RESET_TOKEN\",\"newPassword\":\"$NEW_PASSWORD\"}"   # 400
+call GET /api/v1/auth/me "" "$ACCESS"                                    # 401: sessions revoked
+
+call POST /api/v1/auth/login "{\"email\":\"$EMAIL\",\"password\":\"$NEW_PASSWORD\"}"
+ACCESS=$(field accessToken)
+```
+
+```powershell
+$newPassword = "walkthrough-reset-" + [guid]::NewGuid()
+show (api POST /api/v1/auth/password/reset @{ token = $resetToken; newPassword = $newPassword })
+show (api POST /api/v1/auth/password/reset @{ token = $resetToken; newPassword = $newPassword })   # 400
+show (api GET /api/v1/auth/me -Token $access)                            # 401: sessions revoked
+
+$access = (api POST /api/v1/auth/login @{ email = $email; password = $newPassword }).data.accessToken
+```
+
+---
+
+### POST /api/v1/auth/password/change
+
+Authenticated, `{ currentPassword, newPassword }` → `200` with new tokens. Wrong `currentPassword` → `401`.
+
+```bash
+CHANGED_PASSWORD="walkthrough-change-$(date +%s)-passphrase"
+call POST /api/v1/auth/password/change "{\"currentPassword\":\"wrong-password-123\",\"newPassword\":\"$CHANGED_PASSWORD\"}" "$ACCESS"   # 401
+call POST /api/v1/auth/password/change "{\"currentPassword\":\"$NEW_PASSWORD\",\"newPassword\":\"$CHANGED_PASSWORD\"}" "$ACCESS"
+ACCESS=$(field accessToken)
+```
+
+```powershell
+$changedPassword = "walkthrough-change-" + [guid]::NewGuid()
+show (api POST /api/v1/auth/password/change @{ currentPassword = "wrong-password-123"; newPassword = $changedPassword } $access)   # 401
+$changed = api POST /api/v1/auth/password/change @{ currentPassword = $newPassword; newPassword = $changedPassword } $access
+show $changed
+$access = $changed.data.accessToken
+```
+
+---
+
+### POST /api/v1/auth/mfa/enroll
+
+Authenticated → `200` with `secret`, `otpauthUrl` and 10 `recoveryCodes` (shown once).
+Add the `secret` to an authenticator app (Google Authenticator, Microsoft Authenticator…: "enter a setup key").
+
+```bash
+call POST /api/v1/auth/mfa/enroll "" "$ACCESS"
+SECRET=$(field secret); echo "Secret: $SECRET"
+RECOVERY=$(printf '%s' "$BODY" | sed -nE 's/.*"recoveryCodes":\["([^"]+)".*/\1/p')
+```
+
+```powershell
+$enroll = api POST /api/v1/auth/mfa/enroll -Token $access
+show $enroll
+$recovery = $enroll.data.recoveryCodes[0]
+```
+
+---
+
+### POST /api/v1/auth/mfa/verify
+
+**1. Confirm enrolment** (with a Bearer token) → `200` `{ mfaEnabled: true }`. Type the code shown by the app.
+
+```bash
+CODE=123456   # replace with the current code from your authenticator app
+call POST /api/v1/auth/mfa/verify "{\"code\":\"$CODE\"}" "$ACCESS"
+```
+
+```powershell
+$code = Read-Host "6-digit code from your authenticator app"
+show (api POST /api/v1/auth/mfa/verify @{ code = $code } $access)
+```
+
+**2. Complete a login** (without a Bearer token). Login now returns an `mfaToken` instead of tokens.
+Wait for a **new** code: a code that was already used is rejected (replay protection).
+
+```bash
+call POST /api/v1/auth/login "{\"email\":\"$EMAIL\",\"password\":\"$CHANGED_PASSWORD\"}"
+MFA_TOKEN=$(field mfaToken)
+CODE=654321   # replace with a NEW code from your authenticator app
+call POST /api/v1/auth/mfa/verify "{\"mfaToken\":\"$MFA_TOKEN\",\"code\":\"$CODE\"}"
+
+# With a recovery code instead (each one works once)
+call POST /api/v1/auth/login "{\"email\":\"$EMAIL\",\"password\":\"$CHANGED_PASSWORD\"}"
+MFA_TOKEN=$(field mfaToken)
+call POST /api/v1/auth/mfa/verify "{\"mfaToken\":\"$MFA_TOKEN\",\"recoveryCode\":\"$RECOVERY\"}"
+ACCESS=$(field accessToken)
+```
+
+```powershell
+$mfaToken = (api POST /api/v1/auth/login @{ email = $email; password = $changedPassword }).data.mfaToken
+$code = Read-Host "NEW 6-digit code from your authenticator app"
+show (api POST /api/v1/auth/mfa/verify @{ mfaToken = $mfaToken; code = $code })
+
+# With a recovery code instead (each one works once)
+$mfaToken = (api POST /api/v1/auth/login @{ email = $email; password = $changedPassword }).data.mfaToken
+$done = api POST /api/v1/auth/mfa/verify @{ mfaToken = $mfaToken; recoveryCode = $recovery }
+show $done
+$access = $done.data.accessToken
+```
+
+---
+
+### GET /api/v1/users
+
+ADMIN only → `200` with a paginated list. A USER → `403`. The admin is created with the operator script,
+which prints a temporary password; the commands below read it automatically.
+
+```bash
+call GET /api/v1/users "" "$ACCESS"                                      # 403 for a USER
+
+ADMIN_EMAIL="admin-$(date +%s)@example.com"
+ADMIN_PASSWORD=$(npm run -s admin:create -- "$ADMIN_EMAIL" | sed -n 's/.*after first login): //p')
+call POST /api/v1/auth/login "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}"
+ADMIN_ACCESS=$(field accessToken)
+call GET "/api/v1/users?limit=20&offset=0" "" "$ADMIN_ACCESS"            # 200
+```
+
+```powershell
+show (api GET /api/v1/users -Token $access)                              # 403 for a USER
+
+$adminEmail = "admin-$(Get-Random)@example.com"
+$adminOutput = npm run -s admin:create -- $adminEmail
+$adminPassword = ($adminOutput | Select-String 'after first login\): (.+)$').Matches[0].Groups[1].Value
+$adminAccess = (api POST /api/v1/auth/login @{ email = $adminEmail; password = $adminPassword }).data.accessToken
+show (api GET "/api/v1/users?limit=20&offset=0" -Token $adminAccess)     # 200
+```
+
+---
+
+### GET /api/v1/users/:id (additional route: object-level check)
+
+Own id → `200`. Someone else's id → `403`, whether it exists or not. An ADMIN can read any id.
+
+```bash
+call GET /api/v1/auth/me "" "$ADMIN_ACCESS"; ADMIN_ID=$(field id)
+call GET "/api/v1/users/$MY_ID" "" "$ACCESS"                             # 200
+call GET "/api/v1/users/$ADMIN_ID" "" "$ACCESS"                          # 403
+call GET "/api/v1/users/$MY_ID" "" "$ADMIN_ACCESS"                       # 200
+```
+
+```powershell
+$adminId = (api GET /api/v1/auth/me -Token $adminAccess).data.id
+show (api GET "/api/v1/users/$myId" -Token $access)                      # 200
+show (api GET "/api/v1/users/$adminId" -Token $access)                   # 403
+show (api GET "/api/v1/users/$myId" -Token $adminAccess)                 # 200
 ```

@@ -1,10 +1,5 @@
 # NOTES
 
-## Hours spent
-
-**TODO: write your honest number here (e.g. "about 14 hours, over two days").**
-
----
 
 ## Threat model
 
@@ -162,9 +157,6 @@ internals in error bodies.
 
 ---
 
-## The honest bucket
-
-**TODO: review and edit this section so it is genuinely yours.**
 
 - **Not sure about:** the 409-versus-enumeration trade-off on register (I followed the fixed status code);
   using 400 rather than 401 for an invalid reset token; returning 401 (not a "locked" message) during a
